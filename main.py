@@ -8,6 +8,7 @@ load_dotenv()
 import os
 import json
 from time import sleep
+from apscheduler.schedulers.blocking import BlockingScheduler
 
 def telegram_bot_sendtext(bot_message):
     tgToken=os.environ.get("tg_token")
@@ -28,11 +29,19 @@ def writeLog(res,bot_message):
         telegram_bot_sendtext('Please Check Log, Message Bad Request')
         f.close()
 
-def initial():
+def initial(subForum):
+    removeLogAndCheckPath()
+    checkJson(subForum)
+
+def removeLogAndCheckPath():
     if os.path.exists('log'):
         os.remove('log')
     if not os.path.exists('src'):
         os.mkdir('src')
+
+def checkJson(subForum):
+    for forum in subForum:
+        touchFile(forum[0])
 
 def fetch(url):
     headers={'User-Agent': "Googlebot/2.1 (+http://www.google.com/bot.html)"}
@@ -109,7 +118,42 @@ def touchFile(forum):
     if not os.path.exists(f'src/{forum}.json'):
         myJson={forum:[]}
         writeJson(forum,myJson)
-        
+
+def notifier(subForum):
+    msgs=[]
+
+    for i in range(len(subForum)):
+
+        target=subForum[i][0]
+
+        url=f'https://www.ptt.cc/bbs/{target}/search?q=recommend%3A{subForum[i][1]}'
+
+        targetJson=loadJson(target)
+        oldList=targetJson[target]
+
+        try:
+            soup=BeautifulSoup(fetch(url),'lxml')
+            newList=getDetails(soup)
+            
+            result=compareOldAndNew(oldList,newList,target)
+            
+            msg = sendNewToTelegram(result,target)
+            msgs.append(msg)
+            
+            oldList=oldList+result
+            
+            if len(oldList)>100:
+                oldList=oldList[50:]
+
+            targetJson[target]=oldList
+            writeJson(target,targetJson)
+
+        except Exception as e:
+            print(e)
+        sleep(3)
+
+    concatenateMsg(msgs)
+            
 
 if __name__ == '__main__':
 
@@ -122,47 +166,8 @@ if __name__ == '__main__':
                 ["Lifeismoney",20]
             ]
 
-    counter=0
+    initial(subForum)
 
-    initial()
-
-    while True:
-
-        msgs=[]
-
-        for i in range(len(subForum)):
-
-            target=subForum[i][0]
-
-            url=f'https://www.ptt.cc/bbs/{target}/search?q=recommend%3A{subForum[i][1]}'
-
-            touchFile(target)
-            targetJson=loadJson(target)
-            oldList=targetJson[target]
-
-            try:
-                soup=BeautifulSoup(fetch(url),'lxml')
-                newList=getDetails(soup)
-                
-                result=compareOldAndNew(oldList,newList,target)
-                
-                msg = sendNewToTelegram(result,target)
-                msgs.append(msg)
-                
-                oldList=oldList+result
-                
-                if len(oldList)>100:
-                    oldList=oldList[50:]
-
-                targetJson[target]=oldList
-                writeJson(target,targetJson)
-
-            except Exception as e:
-                print(e)
-            sleep(3)
-
-        counter+=1
-        concatenateMsg(msgs)
-        print(f'Fetch {counter} Times')
-        sleep(1800)
-                
+    scheduler = BlockingScheduler()
+    scheduler.add_job(notifier, 'interval', args=[subForum], minutes=1)
+    scheduler.start()
